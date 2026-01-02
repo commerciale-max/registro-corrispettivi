@@ -6,7 +6,7 @@
 // AUTENTICAZIONE
 // ==========================================
 
-const APP_PASSWORD_HASH = '8d969eef6ecad3c29a3a629280e686cf0c3f5d5a86aff3ca12020c923adc6c92'; // Hash di Matteo2002!
+const APP_PASSWORD_HASH = '8b1507c5b28868635f3ae97447c7ffb1c54cc2a854edc8dc3add9fc4bd3a877c'; // Hash di Matteo2002!
 const SESSION_TIMEOUT = 30 * 60 * 1000; // 30 minuti in millisecondi
 
 let inactivityTimer;
