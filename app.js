@@ -2,6 +2,117 @@
 // REGISTRO CORRISPETTIVI - APP JAVASCRIPT
 // ==========================================
 
+// ==========================================
+// AUTENTICAZIONE
+// ==========================================
+
+const APP_PASSWORD_HASH = '8d969eef6ecad3c29a3a629280e686cf0c3f5d5a86aff3ca12020c923adc6c92'; // Hash di Matteo2002!
+const SESSION_TIMEOUT = 30 * 60 * 1000; // 30 minuti in millisecondi
+
+let inactivityTimer;
+
+// Funzione per creare hash SHA-256 della password
+async function hashPassword(password) {
+    const encoder = new TextEncoder();
+    const data = encoder.encode(password);
+    const hashBuffer = await crypto.subtle.digest('SHA-256', data);
+    const hashArray = Array.from(new Uint8Array(hashBuffer));
+    return hashArray.map(b => b.toString(16).padStart(2, '0')).join('');
+}
+
+// Verifica login all'avvio
+function checkAuth() {
+    const isLoggedIn = sessionStorage.getItem('isLoggedIn');
+    const loginTime = sessionStorage.getItem('loginTime');
+    
+    if (isLoggedIn === 'true' && loginTime) {
+        const elapsed = Date.now() - parseInt(loginTime);
+        if (elapsed < SESSION_TIMEOUT) {
+            showMainApp();
+            resetInactivityTimer();
+            return;
+        }
+    }
+    
+    showLoginScreen();
+}
+
+// Gestione login
+async function handleLogin(event) {
+    event.preventDefault();
+    
+    const password = document.getElementById('login-password').value;
+    const hashedInput = await hashPassword(password);
+    
+    if (hashedInput === APP_PASSWORD_HASH) {
+        sessionStorage.setItem('isLoggedIn', 'true');
+        sessionStorage.setItem('loginTime', Date.now().toString());
+        showMainApp();
+        resetInactivityTimer();
+    } else {
+        document.getElementById('login-error').classList.remove('d-none');
+        document.getElementById('login-password').value = '';
+    }
+    
+    return false;
+}
+
+// Logout
+function logout() {
+    sessionStorage.removeItem('isLoggedIn');
+    sessionStorage.removeItem('loginTime');
+    clearTimeout(inactivityTimer);
+    showLoginScreen();
+}
+
+// Mostra schermata login
+function showLoginScreen() {
+    document.getElementById('login-screen').classList.remove('d-none');
+    document.getElementById('main-app').classList.add('d-none');
+    document.getElementById('login-password').value = '';
+    document.getElementById('login-error').classList.add('d-none');
+}
+
+// Mostra app principale
+function showMainApp() {
+    document.getElementById('login-screen').classList.add('d-none');
+    document.getElementById('main-app').classList.remove('d-none');
+}
+
+// Toggle visibilità password
+function togglePassword() {
+    const input = document.getElementById('login-password');
+    const icon = document.getElementById('toggle-icon');
+    
+    if (input.type === 'password') {
+        input.type = 'text';
+        icon.classList.remove('bi-eye');
+        icon.classList.add('bi-eye-slash');
+    } else {
+        input.type = 'password';
+        icon.classList.remove('bi-eye-slash');
+        icon.classList.add('bi-eye');
+    }
+}
+
+// Reset timer inattività
+function resetInactivityTimer() {
+    clearTimeout(inactivityTimer);
+    inactivityTimer = setTimeout(() => {
+        alert('Sessione scaduta per inattività');
+        logout();
+    }, SESSION_TIMEOUT);
+}
+
+// Eventi per rilevare attività utente
+['mousedown', 'mousemove', 'keypress', 'scroll', 'touchstart', 'click'].forEach(event => {
+    document.addEventListener(event, () => {
+        if (sessionStorage.getItem('isLoggedIn') === 'true') {
+            resetInactivityTimer();
+        }
+    });
+});
+
 // Configurazione API
 const API_CONFIG = {
     baseUrl: 'https://api.openapi.it',
@@ -27,6 +138,9 @@ let appState = {
 // ==========================================
 
 document.addEventListener('DOMContentLoaded', function() {
+    // Verifica autenticazione
+    checkAuth();
+    
     // Imposta data corrente
     const oggi = new Date();
     document.getElementById('current-date').textContent = oggi.toLocaleDateString('it-IT', {
