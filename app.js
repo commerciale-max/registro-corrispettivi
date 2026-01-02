@@ -235,7 +235,7 @@ function aggiungiArticolo() {
                            onchange="calcolaTotale()" data-field="quantita">
                 </div>
                 <div class="col-md-2 mb-2">
-                    <label class="form-label small">Prezzo €</label>
+                    <label class="form-label small">Importo (IVA incl.)</label>
                     <input type="number" class="form-control" step="0.01" placeholder="0.00"
                            onchange="calcolaTotale()" data-field="prezzo">
                 </div>
@@ -271,28 +271,33 @@ function rimuoviArticolo(id) {
 function calcolaTotale() {
     let subtotale = 0;
     let totaleIva = 0;
+    let totaleLordo = 0;
     const articoli = [];
     
     document.querySelectorAll('.product-row').forEach(row => {
         const descrizione = row.querySelector('[data-field="descrizione"]').value;
         const quantita = parseFloat(row.querySelector('[data-field="quantita"]').value) || 0;
-        const prezzo = parseFloat(row.querySelector('[data-field="prezzo"]').value) || 0;
+        const prezzoLordo = parseFloat(row.querySelector('[data-field="prezzo"]').value) || 0;
         const iva = parseFloat(row.querySelector('[data-field="iva"]').value) || 0;
         
-        const importo = quantita * prezzo;
-        const importoIva = importo * (iva / 100);
+        // Calcolo con SCORPORO IVA (prezzo inserito è lordo)
+        const importoLordo = quantita * prezzoLordo;
+        const imponibile = importoLordo / (1 + iva / 100);
+        const importoIva = importoLordo - imponibile;
         
-        subtotale += importo;
+        subtotale += imponibile;
         totaleIva += importoIva;
+        totaleLordo += importoLordo;
         
-        if (descrizione && prezzo > 0) {
+        if (descrizione && prezzoLordo > 0) {
             articoli.push({
                 descrizione,
                 quantita,
-                prezzo,
+                prezzo: prezzoLordo,
                 iva,
-                importo,
-                importoIva
+                importo: imponibile,
+                importoIva,
+                importoLordo
             });
         }
     });
@@ -660,7 +665,7 @@ function visualizzaScontrino(id) {
                 <tr>
                     <th>Descrizione</th>
                     <th>Qta</th>
-                    <th>Prezzo</th>
+                    <th>Imponibile</th>
                     <th>IVA</th>
                     <th>Totale</th>
                 </tr>
@@ -670,9 +675,9 @@ function visualizzaScontrino(id) {
                     <tr>
                         <td>${a.descrizione}</td>
                         <td>${a.quantita}</td>
-                        <td>${formatCurrency(a.prezzo)}</td>
-                        <td>${a.iva}%</td>
-                        <td>${formatCurrency(a.importo + a.importoIva)}</td>
+                        <td>${formatCurrency(a.importo)}</td>
+                        <td>${a.iva}% (${formatCurrency(a.importoIva)})</td>
+                        <td>${formatCurrency(a.importoLordo || (a.importo + a.importoIva))}</td>
                     </tr>
                 `).join('')}
             </tbody>
