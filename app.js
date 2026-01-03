@@ -77,6 +77,15 @@ function showLoginScreen() {
 function showMainApp() {
     document.getElementById('login-screen').classList.add('d-none');
     document.getElementById('main-app').classList.remove('d-none');
+    
+    // Sincronizza dati da OpenAPI dopo il login
+    setTimeout(() => {
+        if (appState.token) {
+            sincronizzaDaAPI(false).then(() => {
+                aggiornaStatistiche();
+            });
+        }
+    }, 500);
 }
 
 // Toggle visibilità password
@@ -112,6 +121,113 @@ function resetInactivityTimer() {
         }
     });
 });
+
+// ==========================================
+// SINCRONIZZAZIONE CON OPENAPI
+// ==========================================
+
+async function sincronizzaDaAPI(showMessage = true) {
+    if (!appState.token) {
+        if (showMessage) showToast('Attenzione', 'Configura prima il token API', 'warning');
+        return;
+    }
+
+    if (showMessage) showToast('Sincronizzazione', 'Recupero dati da OpenAPI...', 'info');
+
+    try {
+        const baseUrl = appState.ambiente === 'production' ? API_CONFIG.baseUrl : API_CONFIG.sandboxUrl;
+        const response = await fetch(`${baseUrl}${API_CONFIG.endpoints.receipts}`, {
+            method: 'GET',
+            headers: {
+                'Authorization': 'Bearer ' + appState.token
+            }
+        });
+
+        if (response.ok) {
+            const data = await response.json();
+            
+            // Converti i dati API nel formato locale
+            if (data && Array.isArray(data.data)) {
+                appState.scontrini = data.data.map(receipt => convertFromAPI(receipt));
+            } else if (data && Array.isArray(data)) {
+                appState.scontrini = data.map(receipt => convertFromAPI(receipt));
+            }
+            
+            // Salva in locale come cache
+            localStorage.setItem('scontrini', JSON.stringify(appState.scontrini));
+            localStorage.setItem('ultimo_sync', new Date().toISOString());
+            
+            // Aggiorna UI
+            aggiornaStatistiche();
+            aggiornaUltimoSync();
+            
+            if (showMessage) showToast('Successo', `Sincronizzati ${appState.scontrini.length} scontrini`, 'success');
+        } else {
+            const error = await response.json();
+            if (showMessage) showToast('Errore', error.message || 'Errore durante la sincronizzazione', 'danger');
+        }
+    } catch (error) {
+        if (showMessage) showToast('Errore', 'Impossibile connettersi a OpenAPI', 'danger');
+        console.error('Errore sincronizzazione:', error);
+    }
+}
+
+// Converte un record API nel formato locale
+function convertFromAPI(receipt) {
+    return {
+        id: receipt.id || receipt.uuid || generateId(),
+        numero: receipt.document_number || receipt.number || 'N/D',
+        dataOra: receipt.created_at || receipt.date || new Date().toISOString(),
+        articoli: (receipt.items || []).map(item => ({
+            descrizione: item.description || '',
+            quantita: item.quantity || 1,
+            prezzo: item.amount || item.unit_price || 0,
+            iva: item.vat_rate || 22,
+            importo: (item.amount || item.unit_price || 0) / (1 + (item.vat_rate || 22) / 100),
+            importoIva: (item.amount || item.unit_price || 0) - ((item.amount || item.unit_price || 0) / (1 + (item.vat_rate || 22) / 100)),
+            importoLordo: item.amount || item.unit_price || 0
+        })),
+        metodoPagamento: convertPaymentMethod(receipt.payment_method),
+        totale: receipt.total_amount || receipt.total || 0,
+        stato: convertStatus(receipt.status),
+        risposta: receipt
+    };
+}
+
+// Converte metodo pagamento da API a locale
+function convertPaymentMethod(method) {
+    const map = {
+        'cash': 'contanti',
+        'card': 'carta',
+        'credit_card': 'carta',
+        'debit_card': 'bancomat',
+        'other': 'altro'
+    };
+    return map[method] || 'contanti';
+}
+
+// Converte stato da API a locale
+function convertStatus(status) {
+    const map = {
+        'sent': 'inviato',
+        'delivered': 'inviato',
+        'accepted': 'inviato',
+        'pending': 'pending',
+        'processing': 'pending',
+        'error': 'errore',
+        'rejected': 'errore'
+    };
+    return map[status] || 'inviato';
+}
+
+// Aggiorna indicatore ultima sincronizzazione
+function aggiornaUltimoSync() {
+    const ultimoSync = localStorage.getItem('ultimo_sync');
+    const elemento = document.getElementById('ultimo-sync');
+    if (elemento && ultimoSync) {
+        elemento.textContent = 'Ultimo aggiornamento: ' + formatDateTime(ultimoSync);
+    }
+}
 
 // Configurazione API
 const API_CONFIG = {
@@ -168,6 +284,9 @@ document.addEventListener('DOMContentLoaded', function() {
 
     // Aggiorna statistiche
     aggiornaStatistiche();
+
+    // Aggiorna indicatore ultimo sync
+    aggiornaUltimoSync();
 
     // Aggiungi primo articolo vuoto
     aggiungiArticolo();
