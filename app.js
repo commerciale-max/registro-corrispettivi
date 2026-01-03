@@ -2,16 +2,82 @@
 // REGISTRO CORRISPETTIVI - APP JAVASCRIPT
 // ==========================================
 
+// Configurazione API - USA IL PROXY LOCALE
+const API_CONFIG = {
+    proxyUrl: '/api/proxy',  // Proxy su Vercel che risolve CORS
+    endpoints: {
+        receipts: '/IT-receipts',
+        configurations: '/IT-configurations'
+    }
+};
+
+// Stato dell'applicazione
+let appState = {
+    token: localStorage.getItem('api_token') || '',
+    ambiente: localStorage.getItem('api_ambiente') || 'sandbox',
+    configurazione: JSON.parse(localStorage.getItem('configurazione') || '{}'),
+    articoliCorrente: [],
+    scontrini: JSON.parse(localStorage.getItem('scontrini') || '[]'),
+    scontrinoSelezionato: null,
+    sessionStart: null
+};
+
+// Timeout sessione (30 minuti)
+const SESSION_TIMEOUT = 30 * 60 * 1000;
+let sessionTimer = null;
+
+// ==========================================
+// FUNZIONE API CENTRALIZZATA (USA PROXY)
+// ==========================================
+
+async function apiCall(endpoint, method = 'GET', body = null) {
+    const headers = {
+        'Content-Type': 'application/json',
+        'Authorization': 'Bearer ' + appState.token,
+        'X-Api-Endpoint': endpoint,
+        'X-Api-Environment': appState.ambiente
+    };
+
+    const options = {
+        method: method,
+        headers: headers
+    };
+
+    if (body && (method === 'POST' || method === 'PATCH')) {
+        options.body = JSON.stringify(body);
+    }
+
+    const response = await fetch(API_CONFIG.proxyUrl, options);
+    return response;
+}
+
 // ==========================================
 // AUTENTICAZIONE
 // ==========================================
 
-const APP_PASSWORD_HASH = '8b1507c5b28868635f3ae97447c7ffb1c54cc2a854edc8dc3add9fc4bd3a877c'; // Hash di Matteo2002!
-const SESSION_TIMEOUT = 30 * 60 * 1000; // 30 minuti in millisecondi
+function checkSession() {
+    const sessionData = localStorage.getItem('session_start');
+    if (sessionData) {
+        const sessionStart = parseInt(sessionData);
+        const now = Date.now();
+        if (now - sessionStart < SESSION_TIMEOUT) {
+            appState.sessionStart = sessionStart;
+            resetSessionTimer();
+            return true;
+        }
+    }
+    return false;
+}
 
-let inactivityTimer;
+function resetSessionTimer() {
+    if (sessionTimer) clearTimeout(sessionTimer);
+    sessionTimer = setTimeout(() => {
+        logout();
+        showToast('Sessione scaduta', 'Effettua nuovamente il login', 'warning');
+    }, SESSION_TIMEOUT);
+    localStorage.setItem('session_start', Date.now().toString());
+}
 
-// Funzione per creare hash SHA-256 della password
 async function hashPassword(password) {
     const encoder = new TextEncoder();
     const data = encoder.encode(password);
@@ -20,60 +86,44 @@ async function hashPassword(password) {
     return hashArray.map(b => b.toString(16).padStart(2, '0')).join('');
 }
 
-// Verifica login all'avvio
-function checkAuth() {
-    const isLoggedIn = sessionStorage.getItem('isLoggedIn');
-    const loginTime = sessionStorage.getItem('loginTime');
-    
-    if (isLoggedIn === 'true' && loginTime) {
-        const elapsed = Date.now() - parseInt(loginTime);
-        if (elapsed < SESSION_TIMEOUT) {
-            showMainApp();
-            resetInactivityTimer();
-            return;
-        }
-    }
-    
-    showLoginScreen();
-}
-
-// Gestione login
-async function handleLogin(event) {
-    event.preventDefault();
-    
+async function login() {
     const password = document.getElementById('login-password').value;
-    const hashedInput = await hashPassword(password);
-    
-    if (hashedInput === APP_PASSWORD_HASH) {
-        sessionStorage.setItem('isLoggedIn', 'true');
-        sessionStorage.setItem('loginTime', Date.now().toString());
+    if (!password) {
+        showToast('Errore', 'Inserisci la password', 'danger');
+        return;
+    }
+
+    const hash = await hashPassword(password);
+    const storedHash = localStorage.getItem('app_password_hash');
+
+    if (!storedHash) {
+        // Prima configurazione - salva la password
+        localStorage.setItem('app_password_hash', hash);
+        appState.sessionStart = Date.now();
+        localStorage.setItem('session_start', appState.sessionStart.toString());
+        resetSessionTimer();
         showMainApp();
-        resetInactivityTimer();
+        showToast('Benvenuto', 'Password impostata con successo', 'success');
+    } else if (hash === storedHash) {
+        appState.sessionStart = Date.now();
+        localStorage.setItem('session_start', appState.sessionStart.toString());
+        resetSessionTimer();
+        showMainApp();
     } else {
-        document.getElementById('login-error').classList.remove('d-none');
+        showToast('Errore', 'Password non corretta', 'danger');
         document.getElementById('login-password').value = '';
     }
-    
-    return false;
 }
 
-// Logout
 function logout() {
-    sessionStorage.removeItem('isLoggedIn');
-    sessionStorage.removeItem('loginTime');
-    clearTimeout(inactivityTimer);
-    showLoginScreen();
-}
-
-// Mostra schermata login
-function showLoginScreen() {
-    document.getElementById('login-screen').classList.remove('d-none');
+    if (sessionTimer) clearTimeout(sessionTimer);
+    localStorage.removeItem('session_start');
+    appState.sessionStart = null;
     document.getElementById('main-app').classList.add('d-none');
+    document.getElementById('login-screen').classList.remove('d-none');
     document.getElementById('login-password').value = '';
-    document.getElementById('login-error').classList.add('d-none');
 }
 
-// Mostra app principale
 function showMainApp() {
     document.getElementById('login-screen').classList.add('d-none');
     document.getElementById('main-app').classList.remove('d-none');
@@ -88,175 +138,20 @@ function showMainApp() {
     }, 500);
 }
 
-// Toggle visibilità password
-function togglePassword() {
-    const input = document.getElementById('login-password');
-    const icon = document.getElementById('toggle-icon');
-    
-    if (input.type === 'password') {
-        input.type = 'text';
-        icon.classList.remove('bi-eye');
-        icon.classList.add('bi-eye-slash');
-    } else {
-        input.type = 'password';
-        icon.classList.remove('bi-eye-slash');
-        icon.classList.add('bi-eye');
-    }
-}
-
-// Reset timer inattività
-function resetInactivityTimer() {
-    clearTimeout(inactivityTimer);
-    inactivityTimer = setTimeout(() => {
-        alert('Sessione scaduta per inattività');
-        logout();
-    }, SESSION_TIMEOUT);
-}
-
-// Eventi per rilevare attività utente
-['mousedown', 'mousemove', 'keypress', 'scroll', 'touchstart', 'click'].forEach(event => {
-    document.addEventListener(event, () => {
-        if (sessionStorage.getItem('isLoggedIn') === 'true') {
-            resetInactivityTimer();
-        }
-    });
-});
-
-// ==========================================
-// SINCRONIZZAZIONE CON OPENAPI
-// ==========================================
-
-async function sincronizzaDaAPI(showMessage = true) {
-    if (!appState.token) {
-        if (showMessage) showToast('Attenzione', 'Configura prima il token API', 'warning');
-        return;
-    }
-
-    if (showMessage) showToast('Sincronizzazione', 'Recupero dati da OpenAPI...', 'info');
-
-    try {
-        const baseUrl = appState.ambiente === 'production' ? API_CONFIG.baseUrl : API_CONFIG.sandboxUrl;
-        const response = await fetch(`${baseUrl}${API_CONFIG.endpoints.receipts}`, {
-            method: 'GET',
-            headers: {
-                'Authorization': 'Bearer ' + appState.token
-            }
-        });
-
-        if (response.ok) {
-            const data = await response.json();
-            
-            // Converti i dati API nel formato locale
-            if (data && Array.isArray(data.data)) {
-                appState.scontrini = data.data.map(receipt => convertFromAPI(receipt));
-            } else if (data && Array.isArray(data)) {
-                appState.scontrini = data.map(receipt => convertFromAPI(receipt));
-            }
-            
-            // Salva in locale come cache
-            localStorage.setItem('scontrini', JSON.stringify(appState.scontrini));
-            localStorage.setItem('ultimo_sync', new Date().toISOString());
-            
-            // Aggiorna UI
-            aggiornaStatistiche();
-            aggiornaUltimoSync();
-            
-            if (showMessage) showToast('Successo', `Sincronizzati ${appState.scontrini.length} scontrini`, 'success');
-        } else {
-            const error = await response.json();
-            if (showMessage) showToast('Errore', error.message || 'Errore durante la sincronizzazione', 'danger');
-        }
-    } catch (error) {
-        if (showMessage) showToast('Errore', 'Impossibile connettersi a OpenAPI', 'danger');
-        console.error('Errore sincronizzazione:', error);
-    }
-}
-
-// Converte un record API nel formato locale
-function convertFromAPI(receipt) {
-    return {
-        id: receipt.id || receipt.uuid || generateId(),
-        numero: receipt.document_number || receipt.number || 'N/D',
-        dataOra: receipt.created_at || receipt.date || new Date().toISOString(),
-        articoli: (receipt.items || []).map(item => ({
-            descrizione: item.description || '',
-            quantita: item.quantity || 1,
-            prezzo: item.amount || item.unit_price || 0,
-            iva: item.vat_rate || 22,
-            importo: (item.amount || item.unit_price || 0) / (1 + (item.vat_rate || 22) / 100),
-            importoIva: (item.amount || item.unit_price || 0) - ((item.amount || item.unit_price || 0) / (1 + (item.vat_rate || 22) / 100)),
-            importoLordo: item.amount || item.unit_price || 0
-        })),
-        metodoPagamento: convertPaymentMethod(receipt.payment_method),
-        totale: receipt.total_amount || receipt.total || 0,
-        stato: convertStatus(receipt.status),
-        risposta: receipt
-    };
-}
-
-// Converte metodo pagamento da API a locale
-function convertPaymentMethod(method) {
-    const map = {
-        'cash': 'contanti',
-        'card': 'carta',
-        'credit_card': 'carta',
-        'debit_card': 'bancomat',
-        'other': 'altro'
-    };
-    return map[method] || 'contanti';
-}
-
-// Converte stato da API a locale
-function convertStatus(status) {
-    const map = {
-        'sent': 'inviato',
-        'delivered': 'inviato',
-        'accepted': 'inviato',
-        'pending': 'pending',
-        'processing': 'pending',
-        'error': 'errore',
-        'rejected': 'errore'
-    };
-    return map[status] || 'inviato';
-}
-
-// Aggiorna indicatore ultima sincronizzazione
-function aggiornaUltimoSync() {
-    const ultimoSync = localStorage.getItem('ultimo_sync');
-    const elemento = document.getElementById('ultimo-sync');
-    if (elemento && ultimoSync) {
-        elemento.textContent = 'Ultimo aggiornamento: ' + formatDateTime(ultimoSync);
-    }
-}
-
-// Configurazione API
-const API_CONFIG = {
-    baseUrl: 'https://api.openapi.it',
-    sandboxUrl: 'https://sandbox.openapi.it',
-    endpoints: {
-        receipts: '/IT-receipts',
-        configurations: '/IT-configurations'
-    }
-};
-
-// Stato dell'applicazione
-let appState = {
-    token: localStorage.getItem('api_token') || '',
-    ambiente: localStorage.getItem('api_ambiente') || 'sandbox',
-    configurazione: JSON.parse(localStorage.getItem('configurazione') || '{}'),
-    articoliCorrente: [],
-    scontrini: JSON.parse(localStorage.getItem('scontrini') || '[]'),
-    scontrinoSelezionato: null
-};
+// Reset attività utente
+document.addEventListener('click', resetSessionTimer);
+document.addEventListener('keypress', resetSessionTimer);
 
 // ==========================================
 // INIZIALIZZAZIONE
 // ==========================================
 
 document.addEventListener('DOMContentLoaded', function() {
-    // Verifica autenticazione
-    checkAuth();
-    
+    // Controlla sessione esistente
+    if (checkSession()) {
+        showMainApp();
+    }
+
     // Imposta data corrente
     const oggi = new Date();
     document.getElementById('current-date').textContent = oggi.toLocaleDateString('it-IT', {
@@ -267,685 +162,518 @@ document.addEventListener('DOMContentLoaded', function() {
     });
 
     // Imposta date filtri
-    document.getElementById('filtro-data-inizio').valueAsDate = oggi;
-    document.getElementById('filtro-data-fine').valueAsDate = oggi;
+    const dataInizio = document.getElementById('filtro-data-inizio');
+    const dataFine = document.getElementById('filtro-data-fine');
+    if (dataInizio) dataInizio.valueAsDate = oggi;
+    if (dataFine) dataFine.valueAsDate = oggi;
 
-    // Carica configurazione salvata
+    // Carica configurazione
     caricaConfigurazione();
-
-    // Gestione navigazione sidebar
-    document.querySelectorAll('.sidebar .nav-link').forEach(link => {
-        link.addEventListener('click', function(e) {
-            e.preventDefault();
-            const section = this.dataset.section;
-            showSection(section);
-        });
-    });
-
+    
     // Aggiorna statistiche
     aggiornaStatistiche();
-
-    // Aggiorna indicatore ultimo sync
-    aggiornaUltimoSync();
-
-    // Aggiungi primo articolo vuoto
-    aggiungiArticolo();
-
-    // Controlla se configurato
+    
+    // Verifica configurazione
     checkConfigurazione();
+
+    // Enter per login
+    document.getElementById('login-password')?.addEventListener('keypress', function(e) {
+        if (e.key === 'Enter') login();
+    });
 });
 
 // ==========================================
 // NAVIGAZIONE
 // ==========================================
 
-function showSection(sectionName) {
+function showSection(sectionId) {
     // Nascondi tutte le sezioni
-    document.querySelectorAll('main > section').forEach(section => {
+    document.querySelectorAll('section').forEach(section => {
         section.classList.add('hidden');
     });
-
+    
     // Mostra la sezione richiesta
-    const targetSection = document.getElementById('section-' + sectionName);
-    if (targetSection) {
-        targetSection.classList.remove('hidden');
-    }
-
-    // Aggiorna menu attivo
-    document.querySelectorAll('.sidebar .nav-link').forEach(link => {
+    document.getElementById('section-' + sectionId).classList.remove('hidden');
+    
+    // Aggiorna nav
+    document.querySelectorAll('.nav-link').forEach(link => {
         link.classList.remove('active');
-        if (link.dataset.section === sectionName) {
-            link.classList.add('active');
-        }
     });
+    document.querySelector(`[onclick="showSection('${sectionId}')"]`)?.classList.add('active');
 
-    // Aggiorna titolo pagina
-    const titoli = {
-        'dashboard': 'Dashboard',
-        'nuovo-scontrino': 'Nuovo Scontrino',
-        'registro': 'Registro Corrispettivi',
-        'resi': 'Resi e Annullamenti',
-        'configurazione': 'Configurazione'
-    };
-    document.getElementById('page-title').textContent = titoli[sectionName] || 'Dashboard';
+    // Carica dati specifici per sezione
+    if (sectionId === 'registro') {
+        caricaRegistro();
+    } else if (sectionId === 'configurazione') {
+        caricaConfigurazione();
+    }
 }
 
 // ==========================================
-// GESTIONE ARTICOLI
+// STATISTICHE DASHBOARD
 // ==========================================
 
-let articoloCounter = 0;
+function aggiornaStatistiche() {
+    const oggi = new Date();
+    oggi.setHours(0, 0, 0, 0);
+    
+    const scontriniOggi = appState.scontrini.filter(s => {
+        const data = new Date(s.dataOra);
+        data.setHours(0, 0, 0, 0);
+        return data.getTime() === oggi.getTime() && s.stato !== 'annullato';
+    });
+
+    const totaleOggi = scontriniOggi.reduce((sum, s) => sum + s.totale, 0);
+    const numeroOggi = scontriniOggi.length;
+
+    // Calcola IVA
+    let totaleIva = 0;
+    scontriniOggi.forEach(s => {
+        s.articoli.forEach(a => {
+            totaleIva += a.importoIva || 0;
+        });
+    });
+
+    document.getElementById('totale-oggi').textContent = formatCurrency(totaleOggi);
+    document.getElementById('numero-scontrini').textContent = numeroOggi;
+    document.getElementById('totale-iva').textContent = formatCurrency(totaleIva);
+}
+
+// ==========================================
+// NUOVO SCONTRINO
+// ==========================================
+
+function mostraNuovoScontrino() {
+    appState.articoliCorrente = [];
+    aggiornaListaArticoli();
+    
+    // Reset campi
+    document.getElementById('descrizione-articolo').value = '';
+    document.getElementById('importo-lordo').value = '';
+    document.getElementById('aliquota-iva').value = '22';
+    document.getElementById('metodo-pagamento').value = 'contanti';
+    
+    const modal = new bootstrap.Modal(document.getElementById('modal-nuovo-scontrino'));
+    modal.show();
+}
+
+function calcolaScorporo() {
+    const importoLordo = parseFloat(document.getElementById('importo-lordo').value) || 0;
+    const aliquota = parseFloat(document.getElementById('aliquota-iva').value) || 22;
+    
+    const importoNetto = importoLordo / (1 + aliquota / 100);
+    const importoIva = importoLordo - importoNetto;
+    
+    document.getElementById('importo-netto-preview').textContent = formatCurrency(importoNetto);
+    document.getElementById('iva-preview').textContent = formatCurrency(importoIva);
+}
 
 function aggiungiArticolo() {
-    articoloCounter++;
-    const container = document.getElementById('lista-articoli');
-    
-    const articoloHTML = `
-        <div class="product-row" id="articolo-${articoloCounter}">
-            <div class="row align-items-end">
-                <div class="col-md-4 mb-2">
-                    <label class="form-label small">Descrizione</label>
-                    <input type="text" class="form-control" placeholder="Nome prodotto/servizio" 
-                           onchange="calcolaTotale()" data-field="descrizione">
-                </div>
-                <div class="col-md-2 mb-2">
-                    <label class="form-label small">Quantità</label>
-                    <input type="number" class="form-control" value="1" min="1" 
-                           onchange="calcolaTotale()" data-field="quantita">
-                </div>
-                <div class="col-md-2 mb-2">
-                    <label class="form-label small">Importo (IVA incl.)</label>
-                    <input type="number" class="form-control" step="0.01" placeholder="0.00"
-                           onchange="calcolaTotale()" data-field="prezzo">
-                </div>
-                <div class="col-md-2 mb-2">
-                    <label class="form-label small">IVA %</label>
-                    <select class="form-select" onchange="calcolaTotale()" data-field="iva">
-                        <option value="22">22%</option>
-                        <option value="10">10%</option>
-                        <option value="4">4%</option>
-                        <option value="0">Esente</option>
-                    </select>
-                </div>
-                <div class="col-md-2 mb-2">
-                    <button class="btn btn-outline-danger w-100" onclick="rimuoviArticolo(${articoloCounter})">
-                        <i class="bi bi-trash"></i>
-                    </button>
-                </div>
-            </div>
-        </div>
-    `;
-    
-    container.insertAdjacentHTML('beforeend', articoloHTML);
-}
+    const descrizione = document.getElementById('descrizione-articolo').value.trim();
+    const importoLordo = parseFloat(document.getElementById('importo-lordo').value) || 0;
+    const aliquota = parseFloat(document.getElementById('aliquota-iva').value) || 22;
 
-function rimuoviArticolo(id) {
-    const elemento = document.getElementById('articolo-' + id);
-    if (elemento) {
-        elemento.remove();
-        calcolaTotale();
+    if (!descrizione) {
+        showToast('Attenzione', 'Inserisci una descrizione', 'warning');
+        return;
     }
-}
-
-function calcolaTotale() {
-    let subtotale = 0;
-    let totaleIva = 0;
-    let totaleLordo = 0;
-    const articoli = [];
-    
-    document.querySelectorAll('.product-row').forEach(row => {
-        const descrizione = row.querySelector('[data-field="descrizione"]').value;
-        const quantita = parseFloat(row.querySelector('[data-field="quantita"]').value) || 0;
-        const prezzoLordo = parseFloat(row.querySelector('[data-field="prezzo"]').value) || 0;
-        const iva = parseFloat(row.querySelector('[data-field="iva"]').value) || 0;
-        
-        // Calcolo con SCORPORO IVA (prezzo inserito è lordo)
-        const importoLordo = quantita * prezzoLordo;
-        const imponibile = importoLordo / (1 + iva / 100);
-        const importoIva = importoLordo - imponibile;
-        
-        subtotale += imponibile;
-        totaleIva += importoIva;
-        totaleLordo += importoLordo;
-        
-        if (descrizione && prezzoLordo > 0) {
-            articoli.push({
-                descrizione,
-                quantita,
-                prezzo: prezzoLordo,
-                iva,
-                importo: imponibile,
-                importoIva,
-                importoLordo
-            });
-        }
-    });
-    
-    appState.articoliCorrente = articoli;
-    
-    document.getElementById('subtotale').textContent = formatCurrency(subtotale);
-    document.getElementById('totale-iva').textContent = formatCurrency(totaleIva);
-    document.getElementById('totale').textContent = formatCurrency(subtotale + totaleIva);
-}
-
-// ==========================================
-// EMISSIONE SCONTRINO
-// ==========================================
-
-async function emettiScontrino() {
-    // Verifica configurazione
-    if (!appState.token) {
-        showToast('Errore', 'Configura prima il token API nelle impostazioni', 'danger');
-        showSection('configurazione');
+    if (importoLordo <= 0) {
+        showToast('Attenzione', 'Inserisci un importo valido', 'warning');
         return;
     }
 
-    // Verifica articoli
-    calcolaTotale();
+    const importoNetto = importoLordo / (1 + aliquota / 100);
+    const importoIva = importoLordo - importoNetto;
+
+    appState.articoliCorrente.push({
+        id: generateId(),
+        descrizione: descrizione,
+        quantita: 1,
+        aliquotaIva: aliquota,
+        importoNetto: importoNetto,
+        importoIva: importoIva,
+        importoLordo: importoLordo
+    });
+
+    // Reset campi
+    document.getElementById('descrizione-articolo').value = '';
+    document.getElementById('importo-lordo').value = '';
+    document.getElementById('importo-netto-preview').textContent = '€ 0,00';
+    document.getElementById('iva-preview').textContent = '€ 0,00';
+
+    aggiornaListaArticoli();
+}
+
+function rimuoviArticolo(id) {
+    appState.articoliCorrente = appState.articoliCorrente.filter(a => a.id !== id);
+    aggiornaListaArticoli();
+}
+
+function aggiornaListaArticoli() {
+    const lista = document.getElementById('lista-articoli');
+    const totaleEl = document.getElementById('totale-scontrino');
+    
+    if (appState.articoliCorrente.length === 0) {
+        lista.innerHTML = '<p class="text-muted text-center">Nessun articolo aggiunto</p>';
+        totaleEl.textContent = formatCurrency(0);
+        return;
+    }
+
+    let html = '<table class="table table-sm"><thead><tr><th>Descrizione</th><th>IVA</th><th>Importo</th><th></th></tr></thead><tbody>';
+    let totale = 0;
+
+    appState.articoliCorrente.forEach(art => {
+        totale += art.importoLordo;
+        html += `
+            <tr>
+                <td>${art.descrizione}</td>
+                <td>${art.aliquotaIva}%</td>
+                <td>${formatCurrency(art.importoLordo)}</td>
+                <td><button class="btn btn-sm btn-outline-danger" onclick="rimuoviArticolo('${art.id}')"><i class="bi bi-trash"></i></button></td>
+            </tr>
+        `;
+    });
+
+    html += '</tbody></table>';
+    lista.innerHTML = html;
+    totaleEl.textContent = formatCurrency(totale);
+}
+
+async function emettiScontrino() {
     if (appState.articoliCorrente.length === 0) {
         showToast('Attenzione', 'Aggiungi almeno un articolo', 'warning');
         return;
     }
 
-    // Prepara dati scontrino
-    const metodoPagamento = document.getElementById('metodo-pagamento').value;
-    const totale = appState.articoliCorrente.reduce((sum, art) => sum + art.importo + art.importoIva, 0);
-    
-    const scontrino = {
-        id: generateId(),
-        numero: generateNumeroScontrino(),
-        dataOra: new Date().toISOString(),
-        articoli: [...appState.articoliCorrente],
-        metodoPagamento: metodoPagamento,
-        totale: totale,
-        stato: 'pending',
-        risposta: null
-    };
-
-    // Mostra loading
-    showToast('Invio in corso', 'Attendere...', 'info');
-
-    try {
-        // Prepara payload per API OpenAPI
-        const payload = preparaPayloadAPI(scontrino);
-        
-        // Invia a OpenAPI
-        const response = await inviaAllaAPI(payload);
-        
-        if (response.success) {
-            scontrino.stato = 'inviato';
-            scontrino.risposta = response.data;
-            showToast('Successo', 'Scontrino inviato correttamente!', 'success');
-        } else {
-            scontrino.stato = 'errore';
-            scontrino.risposta = response.error;
-            showToast('Errore', response.error || 'Errore durante l\'invio', 'danger');
-        }
-    } catch (error) {
-        scontrino.stato = 'errore';
-        scontrino.risposta = error.message;
-        showToast('Errore', 'Errore di connessione: ' + error.message, 'danger');
-    }
-
-    // Salva scontrino
-    appState.scontrini.unshift(scontrino);
-    localStorage.setItem('scontrini', JSON.stringify(appState.scontrini));
-
-    // Aggiorna UI
-    aggiornaStatistiche();
-    aggiornaTabellaScontrini();
-
-    // Reset form
-    resetFormScontrino();
-    
-    // Torna alla dashboard
-    showSection('dashboard');
-}
-
-function preparaPayloadAPI(scontrino) {
-    // Formato richiesto da OpenAPI per IT-receipts
-    const items = scontrino.articoli.map(art => ({
-        description: art.descrizione,
-        quantity: art.quantita,
-        unit_price: art.prezzo,
-        vat_rate: art.iva,
-        amount: art.importo + art.importoIva
-    }));
-
-    // Mappa metodo pagamento
-    const paymentMap = {
-        'contanti': 'cash',
-        'carta': 'card',
-        'bancomat': 'card',
-        'altro': 'other'
-    };
-
-    return {
-        fiscal_id: appState.configurazione.codiceFiscale || appState.configurazione.partitaIva,
-        items: items,
-        payment_method: paymentMap[scontrino.metodoPagamento] || 'cash',
-        total_amount: scontrino.totale,
-        document_type: 'receipt',
-        date: new Date().toISOString().split('T')[0]
-    };
-}
-
-async function inviaAllaAPI(payload) {
-    const baseUrl = appState.ambiente === 'production' ? API_CONFIG.baseUrl : API_CONFIG.sandboxUrl;
-    const url = baseUrl + API_CONFIG.endpoints.receipts;
-
-    try {
-        const response = await fetch(url, {
-            method: 'POST',
-            headers: {
-                'Content-Type': 'application/json',
-                'Authorization': 'Bearer ' + appState.token
-            },
-            body: JSON.stringify(payload)
-        });
-
-        const data = await response.json();
-
-        if (response.ok) {
-            return { success: true, data: data };
-        } else {
-            return { success: false, error: data.message || 'Errore API' };
-        }
-    } catch (error) {
-        return { success: false, error: error.message };
-    }
-}
-
-function annullaScontrino() {
-    if (confirm('Vuoi annullare questo scontrino?')) {
-        resetFormScontrino();
-        showSection('dashboard');
-    }
-}
-
-function resetFormScontrino() {
-    document.getElementById('lista-articoli').innerHTML = '';
-    document.getElementById('metodo-pagamento').value = 'contanti';
-    appState.articoliCorrente = [];
-    articoloCounter = 0;
-    aggiungiArticolo();
-    calcolaTotale();
-}
-
-// ==========================================
-// STATISTICHE E DASHBOARD
-// ==========================================
-
-function aggiornaStatistiche() {
-    const oggi = new Date().toDateString();
-    const inizioMese = new Date();
-    inizioMese.setDate(1);
-    inizioMese.setHours(0, 0, 0, 0);
-
-    let incassoOggi = 0;
-    let scontriniOggi = 0;
-    let incassoMese = 0;
-    let pending = 0;
-    let iva22 = 0, iva10 = 0, iva4 = 0, iva0 = 0;
-
-    appState.scontrini.forEach(scontrino => {
-        const dataScontrino = new Date(scontrino.dataOra);
-        
-        // Statistiche oggi
-        if (dataScontrino.toDateString() === oggi && scontrino.stato === 'inviato') {
-            incassoOggi += scontrino.totale;
-            scontriniOggi++;
-            
-            // Riepilogo IVA
-            scontrino.articoli.forEach(art => {
-                switch (art.iva) {
-                    case 22: iva22 += art.importoIva; break;
-                    case 10: iva10 += art.importoIva; break;
-                    case 4: iva4 += art.importoIva; break;
-                    case 0: iva0 += art.importo; break;
-                }
-            });
-        }
-
-        // Statistiche mese
-        if (dataScontrino >= inizioMese && scontrino.stato === 'inviato') {
-            incassoMese += scontrino.totale;
-        }
-
-        // Pending
-        if (scontrino.stato === 'pending') {
-            pending++;
-        }
-    });
-
-    document.getElementById('stat-oggi').textContent = formatCurrency(incassoOggi);
-    document.getElementById('stat-scontrini').textContent = scontriniOggi;
-    document.getElementById('stat-mese').textContent = formatCurrency(incassoMese);
-    document.getElementById('stat-pending').textContent = pending;
-
-    document.getElementById('iva-22').textContent = formatCurrency(iva22);
-    document.getElementById('iva-10').textContent = formatCurrency(iva10);
-    document.getElementById('iva-4').textContent = formatCurrency(iva4);
-    document.getElementById('iva-0').textContent = formatCurrency(iva0);
-
-    // Aggiorna tabella ultimi scontrini
-    aggiornaTabellaScontrini();
-}
-
-function aggiornaTabellaScontrini() {
-    const tbody = document.querySelector('#table-ultimi-scontrini tbody');
-    const ultimi = appState.scontrini.slice(0, 10);
-
-    if (ultimi.length === 0) {
-        tbody.innerHTML = `
-            <tr>
-                <td colspan="5" class="text-center text-muted py-4">
-                    Nessuno scontrino emesso
-                </td>
-            </tr>
-        `;
+    if (!appState.token) {
+        showToast('Errore', 'Configura prima il token API', 'danger');
         return;
     }
 
-    tbody.innerHTML = ultimi.map(s => `
-        <tr>
-            <td>${formatDateTime(s.dataOra)}</td>
-            <td><code>${s.numero}</code></td>
-            <td><strong>${formatCurrency(s.totale)}</strong></td>
-            <td><span class="badge-status badge-${s.stato}">${capitalizeFirst(s.stato)}</span></td>
-            <td>
-                <button class="btn btn-sm btn-outline-primary" onclick="visualizzaScontrino('${s.id}')">
-                    <i class="bi bi-eye"></i>
-                </button>
-            </td>
-        </tr>
-    `).join('');
+    const metodoPagamento = document.getElementById('metodo-pagamento').value;
+    const totale = appState.articoliCorrente.reduce((sum, a) => sum + a.importoLordo, 0);
+
+    // Prepara dati per API
+    const receiptData = {
+        fiscal_id: appState.configurazione.codiceFiscale || appState.configurazione.partitaIva?.replace('IT', ''),
+        date: new Date().toISOString(),
+        items: appState.articoliCorrente.map(art => ({
+            description: art.descrizione,
+            quantity: art.quantita,
+            unit_price: art.importoLordo,
+            vat_rate: art.aliquotaIva,
+            amount: art.importoLordo
+        })),
+        payment_method: metodoPagamento === 'contanti' ? 'cash' : 'card',
+        total_amount: totale
+    };
+
+    showToast('Invio in corso', 'Emissione scontrino...', 'info');
+
+    try {
+        const response = await apiCall(API_CONFIG.endpoints.receipts, 'POST', receiptData);
+        const result = await response.json();
+
+        if (response.ok) {
+            // Salva localmente
+            const nuovoScontrino = {
+                id: result.id || generateId(),
+                numero: generateNumeroScontrino(),
+                dataOra: new Date().toISOString(),
+                articoli: [...appState.articoliCorrente],
+                metodoPagamento: metodoPagamento,
+                totale: totale,
+                stato: 'inviato',
+                risposta: result
+            };
+
+            appState.scontrini.push(nuovoScontrino);
+            localStorage.setItem('scontrini', JSON.stringify(appState.scontrini));
+
+            showToast('Successo', 'Scontrino emesso correttamente', 'success');
+            bootstrap.Modal.getInstance(document.getElementById('modal-nuovo-scontrino')).hide();
+            aggiornaStatistiche();
+
+        } else {
+            showToast('Errore', result.message || result.error || 'Errore durante l\'emissione', 'danger');
+        }
+
+    } catch (error) {
+        console.error('Errore emissione:', error);
+        showToast('Errore', 'Errore di connessione', 'danger');
+    }
+}
+
+// ==========================================
+// SINCRONIZZAZIONE DA API
+// ==========================================
+
+async function sincronizzaDaAPI(showMessages = true) {
+    if (!appState.token) {
+        if (showMessages) showToast('Attenzione', 'Configura prima il token API', 'warning');
+        return;
+    }
+
+    if (showMessages) showToast('Sincronizzazione', 'Scaricamento dati in corso...', 'info');
+
+    try {
+        const response = await apiCall(API_CONFIG.endpoints.receipts, 'GET');
+        const result = await response.json();
+
+        if (response.ok) {
+            const receipts = result.data || result || [];
+            
+            if (Array.isArray(receipts)) {
+                // Converti e unisci con dati locali
+                receipts.forEach(receipt => {
+                    const exists = appState.scontrini.find(s => s.id === receipt.id);
+                    if (!exists) {
+                        appState.scontrini.push(convertFromAPI(receipt));
+                    }
+                });
+
+                localStorage.setItem('scontrini', JSON.stringify(appState.scontrini));
+                aggiornaStatistiche();
+                
+                if (showMessages) showToast('Successo', `Sincronizzati ${receipts.length} scontrini`, 'success');
+            }
+        } else {
+            if (showMessages) showToast('Errore', result.message || 'Errore sincronizzazione', 'danger');
+        }
+
+    } catch (error) {
+        console.error('Errore sincronizzazione:', error);
+        if (showMessages) showToast('Errore', 'Errore di connessione', 'danger');
+    }
+}
+
+function convertFromAPI(receipt) {
+    return {
+        id: receipt.id,
+        numero: receipt.number || receipt.id,
+        dataOra: receipt.date || receipt.created_at,
+        articoli: (receipt.items || []).map(item => ({
+            descrizione: item.description,
+            quantita: item.quantity || 1,
+            aliquotaIva: item.vat_rate || 22,
+            importoNetto: (item.amount || item.unit_price || 0) / (1 + (item.vat_rate || 22) / 100),
+            importoIva: (item.amount || item.unit_price || 0) - ((item.amount || item.unit_price || 0) / (1 + (item.vat_rate || 22) / 100)),
+            importoLordo: item.amount || item.unit_price || 0
+        })),
+        metodoPagamento: receipt.payment_method === 'cash' ? 'contanti' : 'carta',
+        totale: receipt.total_amount || receipt.total || 0,
+        stato: receipt.status === 'error' ? 'errore' : 'inviato',
+        risposta: receipt
+    };
 }
 
 // ==========================================
 // REGISTRO CORRISPETTIVI
 // ==========================================
 
-function filtraRegistro() {
-    const dataInizio = document.getElementById('filtro-data-inizio').value;
-    const dataFine = document.getElementById('filtro-data-fine').value;
-    const stato = document.getElementById('filtro-stato').value;
+function caricaRegistro() {
+    const dataInizio = document.getElementById('filtro-data-inizio')?.value;
+    const dataFine = document.getElementById('filtro-data-fine')?.value;
+    
+    let scontriniFiltrati = appState.scontrini;
 
-    let scontriniFiltrati = appState.scontrini.filter(s => {
-        const dataScontrino = new Date(s.dataOra).toISOString().split('T')[0];
-        
-        if (dataInizio && dataScontrino < dataInizio) return false;
-        if (dataFine && dataScontrino > dataFine) return false;
-        if (stato && s.stato !== stato) return false;
-        
-        return true;
-    });
+    if (dataInizio) {
+        const start = new Date(dataInizio);
+        start.setHours(0, 0, 0, 0);
+        scontriniFiltrati = scontriniFiltrati.filter(s => new Date(s.dataOra) >= start);
+    }
+
+    if (dataFine) {
+        const end = new Date(dataFine);
+        end.setHours(23, 59, 59, 999);
+        scontriniFiltrati = scontriniFiltrati.filter(s => new Date(s.dataOra) <= end);
+    }
+
+    // Ordina per data decrescente
+    scontriniFiltrati.sort((a, b) => new Date(b.dataOra) - new Date(a.dataOra));
 
     renderRegistro(scontriniFiltrati);
 }
 
 function renderRegistro(scontrini) {
-    const tbody = document.querySelector('#table-registro tbody');
-
+    const tbody = document.getElementById('registro-tbody');
+    
     if (scontrini.length === 0) {
-        tbody.innerHTML = `
-            <tr>
-                <td colspan="6" class="text-center text-muted py-4">
-                    Nessuno scontrino trovato
-                </td>
-            </tr>
-        `;
+        tbody.innerHTML = '<tr><td colspan="6" class="text-center text-muted">Nessuno scontrino trovato</td></tr>';
         return;
     }
 
-    const metodiPagamento = {
-        'contanti': 'Contanti',
-        'carta': 'Carta',
-        'bancomat': 'Bancomat',
-        'altro': 'Altro'
-    };
-
-    tbody.innerHTML = scontrini.map(s => `
-        <tr>
-            <td>${formatDateTime(s.dataOra)}</td>
-            <td><code>${s.numero}</code></td>
-            <td><strong>${formatCurrency(s.totale)}</strong></td>
-            <td>${metodiPagamento[s.metodoPagamento] || s.metodoPagamento}</td>
-            <td><span class="badge-status badge-${s.stato}">${capitalizeFirst(s.stato)}</span></td>
-            <td>
-                <button class="btn btn-sm btn-outline-primary me-1" onclick="visualizzaScontrino('${s.id}')">
-                    <i class="bi bi-eye"></i>
-                </button>
-                ${s.stato === 'inviato' ? `
-                    <button class="btn btn-sm btn-outline-danger" onclick="avviaReso('${s.id}')">
-                        <i class="bi bi-arrow-return-left"></i>
-                    </button>
-                ` : ''}
-            </td>
-        </tr>
-    `).join('');
-}
-
-function esportaRegistro() {
-    // Esporta in CSV (Excel compatibile)
-    const dataInizio = document.getElementById('filtro-data-inizio').value;
-    const dataFine = document.getElementById('filtro-data-fine').value;
-    
-    let scontriniFiltrati = appState.scontrini.filter(s => {
-        const dataScontrino = new Date(s.dataOra).toISOString().split('T')[0];
-        if (dataInizio && dataScontrino < dataInizio) return false;
-        if (dataFine && dataScontrino > dataFine) return false;
-        return true;
+    let html = '';
+    scontrini.forEach(s => {
+        const statoClass = s.stato === 'inviato' ? 'success' : (s.stato === 'annullato' ? 'secondary' : 'warning');
+        html += `
+            <tr>
+                <td>${s.numero}</td>
+                <td>${formatDateTime(s.dataOra)}</td>
+                <td>${s.articoli.length} articoli</td>
+                <td>${capitalizeFirst(s.metodoPagamento)}</td>
+                <td><strong>${formatCurrency(s.totale)}</strong></td>
+                <td><span class="badge bg-${statoClass}">${capitalizeFirst(s.stato)}</span></td>
+            </tr>
+        `;
     });
 
-    let csv = 'Data;Numero;Importo;IVA;Totale;Pagamento;Stato\n';
+    tbody.innerHTML = html;
+}
+
+function esportaExcel() {
+    const dataInizio = document.getElementById('filtro-data-inizio')?.value || '';
+    const dataFine = document.getElementById('filtro-data-fine')?.value || '';
+    
+    let scontriniFiltrati = appState.scontrini;
+
+    if (dataInizio) {
+        const start = new Date(dataInizio);
+        start.setHours(0, 0, 0, 0);
+        scontriniFiltrati = scontriniFiltrati.filter(s => new Date(s.dataOra) >= start);
+    }
+
+    if (dataFine) {
+        const end = new Date(dataFine);
+        end.setHours(23, 59, 59, 999);
+        scontriniFiltrati = scontriniFiltrati.filter(s => new Date(s.dataOra) <= end);
+    }
+
+    // Crea CSV
+    let csv = 'Numero;Data;Descrizione;Imponibile;IVA;Totale;Pagamento;Stato\n';
     
     scontriniFiltrati.forEach(s => {
-        const imponibile = s.articoli.reduce((sum, a) => sum + a.importo, 0);
-        const iva = s.articoli.reduce((sum, a) => sum + a.importoIva, 0);
-        csv += `${formatDateTime(s.dataOra)};${s.numero};${imponibile.toFixed(2)};${iva.toFixed(2)};${s.totale.toFixed(2)};${s.metodoPagamento};${s.stato}\n`;
+        s.articoli.forEach(a => {
+            csv += `${s.numero};${formatDateTime(s.dataOra)};${a.descrizione};${a.importoNetto.toFixed(2)};${a.importoIva.toFixed(2)};${a.importoLordo.toFixed(2)};${s.metodoPagamento};${s.stato}\n`;
+        });
     });
 
-    downloadFile(csv, `registro_corrispettivi_${dataInizio}_${dataFine}.csv`, 'text/csv');
-    showToast('Esportazione', 'File CSV scaricato', 'success');
-}
+    // Download
+    const blob = new Blob([csv], { type: 'text/csv;charset=utf-8;' });
+    const link = document.createElement('a');
+    link.href = URL.createObjectURL(blob);
+    link.download = `registro_corrispettivi_${dataInizio}_${dataFine}.csv`;
+    link.click();
 
-function esportaPDF() {
-    showToast('Info', 'Funzionalità PDF in sviluppo', 'info');
-}
-
-// ==========================================
-// VISUALIZZAZIONE DETTAGLIO
-// ==========================================
-
-function visualizzaScontrino(id) {
-    const scontrino = appState.scontrini.find(s => s.id === id);
-    if (!scontrino) return;
-
-    appState.scontrinoSelezionato = scontrino;
-
-    const content = document.getElementById('modal-dettaglio-content');
-    content.innerHTML = `
-        <div class="row">
-            <div class="col-md-6">
-                <p><strong>Numero:</strong> ${scontrino.numero}</p>
-                <p><strong>Data/Ora:</strong> ${formatDateTime(scontrino.dataOra)}</p>
-                <p><strong>Stato:</strong> <span class="badge-status badge-${scontrino.stato}">${capitalizeFirst(scontrino.stato)}</span></p>
-                <p><strong>Metodo Pagamento:</strong> ${capitalizeFirst(scontrino.metodoPagamento)}</p>
-            </div>
-            <div class="col-md-6">
-                <p><strong>Totale:</strong> <span class="fs-4 text-primary">${formatCurrency(scontrino.totale)}</span></p>
-            </div>
-        </div>
-        <hr>
-        <h6>Articoli</h6>
-        <table class="table table-sm">
-            <thead>
-                <tr>
-                    <th>Descrizione</th>
-                    <th>Qta</th>
-                    <th>Imponibile</th>
-                    <th>IVA</th>
-                    <th>Totale</th>
-                </tr>
-            </thead>
-            <tbody>
-                ${scontrino.articoli.map(a => `
-                    <tr>
-                        <td>${a.descrizione}</td>
-                        <td>${a.quantita}</td>
-                        <td>${formatCurrency(a.importo)}</td>
-                        <td>${a.iva}% (${formatCurrency(a.importoIva)})</td>
-                        <td>${formatCurrency(a.importoLordo || (a.importo + a.importoIva))}</td>
-                    </tr>
-                `).join('')}
-            </tbody>
-        </table>
-        ${scontrino.risposta ? `
-            <hr>
-            <h6>Risposta API</h6>
-            <pre class="bg-light p-2 small">${JSON.stringify(scontrino.risposta, null, 2)}</pre>
-        ` : ''}
-    `;
-
-    const modal = new bootstrap.Modal(document.getElementById('modalDettaglio'));
-    modal.show();
-}
-
-function annullaScontrinoSelezionato() {
-    if (!appState.scontrinoSelezionato) return;
-    
-    if (confirm('Sei sicuro di voler annullare questo scontrino? Verrà inviata una nota di credito.')) {
-        avviaReso(appState.scontrinoSelezionato.id);
-        bootstrap.Modal.getInstance(document.getElementById('modalDettaglio')).hide();
-    }
+    showToast('Esportato', 'File CSV scaricato', 'success');
 }
 
 // ==========================================
-// RESI
+// RESI E ANNULLAMENTI
 // ==========================================
 
 function cercaScontrino() {
-    const numero = document.getElementById('scontrino-reso').value.trim();
-    const scontrino = appState.scontrini.find(s => s.numero === numero);
-    
-    if (!scontrino) {
-        showToast('Non trovato', 'Scontrino non trovato', 'warning');
-        document.getElementById('dettaglio-reso').classList.add('hidden');
+    const numero = document.getElementById('cerca-scontrino').value.trim();
+    if (!numero) {
+        showToast('Attenzione', 'Inserisci il numero scontrino', 'warning');
         return;
     }
 
-    renderDettaglioReso(scontrino);
-}
-
-function avviaReso(id) {
-    const scontrino = appState.scontrini.find(s => s.id === id);
-    if (!scontrino) return;
-
-    showSection('resi');
-    document.getElementById('scontrino-reso').value = scontrino.numero;
-    renderDettaglioReso(scontrino);
-}
-
-function renderDettaglioReso(scontrino) {
-    const container = document.getElementById('dettaglio-reso');
-    container.classList.remove('hidden');
+    const scontrino = appState.scontrini.find(s => s.numero === numero || s.id === numero);
     
+    if (!scontrino) {
+        showToast('Non trovato', 'Scontrino non trovato', 'warning');
+        return;
+    }
+
+    appState.scontrinoSelezionato = scontrino;
+    mostraDettaglioReso(scontrino);
+}
+
+function mostraDettaglioReso(scontrino) {
+    const container = document.getElementById('dettaglio-reso');
+    
+    let articoliHtml = scontrino.articoli.map(a => `
+        <div class="form-check">
+            <input class="form-check-input" type="checkbox" value="${a.id}" id="reso-${a.id}">
+            <label class="form-check-label" for="reso-${a.id}">
+                ${a.descrizione} - ${formatCurrency(a.importoLordo)}
+            </label>
+        </div>
+    `).join('');
+
     container.innerHTML = `
-        <div class="card-section mt-4">
-            <h6><i class="bi bi-receipt me-2"></i>Scontrino: ${scontrino.numero}</h6>
-            <p class="text-muted">Data: ${formatDateTime(scontrino.dataOra)} - Totale: ${formatCurrency(scontrino.totale)}</p>
-            
-            <h6 class="mt-4">Seleziona articoli da rendere:</h6>
-            <form id="form-reso">
-                ${scontrino.articoli.map((a, i) => `
-                    <div class="form-check mb-2 p-3 bg-light rounded">
-                        <input class="form-check-input" type="checkbox" id="reso-${i}" data-index="${i}">
-                        <label class="form-check-label d-flex justify-content-between w-100" for="reso-${i}">
-                            <span>${a.descrizione} (x${a.quantita})</span>
-                            <strong>${formatCurrency(a.importo + a.importoIva)}</strong>
-                        </label>
-                    </div>
-                `).join('')}
-            </form>
-            
-            <div class="mt-4">
-                <button class="btn btn-danger" onclick="eseguiReso('${scontrino.id}')">
-                    <i class="bi bi-arrow-return-left me-2"></i>Esegui Reso
+        <div class="card-section mt-3">
+            <h6>Scontrino ${scontrino.numero}</h6>
+            <p>Data: ${formatDateTime(scontrino.dataOra)}</p>
+            <p>Totale: <strong>${formatCurrency(scontrino.totale)}</strong></p>
+            <hr>
+            <p><strong>Seleziona articoli da rendere:</strong></p>
+            ${articoliHtml}
+            <div class="mt-3">
+                <button class="btn btn-warning me-2" onclick="effettuaReso()">
+                    <i class="bi bi-arrow-return-left"></i> Reso Selezionati
+                </button>
+                <button class="btn btn-danger" onclick="annullaScontrino()">
+                    <i class="bi bi-x-circle"></i> Annulla Intero Scontrino
                 </button>
             </div>
         </div>
     `;
+    container.classList.remove('hidden');
 }
 
-async function eseguiReso(scontrinoId) {
-    const scontrino = appState.scontrini.find(s => s.id === scontrinoId);
-    if (!scontrino) return;
+async function effettuaReso() {
+    if (!appState.scontrinoSelezionato) return;
 
-    const checkboxes = document.querySelectorAll('#form-reso input[type="checkbox"]:checked');
+    const checkboxes = document.querySelectorAll('#dettaglio-reso input[type="checkbox"]:checked');
     if (checkboxes.length === 0) {
         showToast('Attenzione', 'Seleziona almeno un articolo', 'warning');
         return;
     }
 
-    const articoliReso = [];
-    checkboxes.forEach(cb => {
-        const index = parseInt(cb.dataset.index);
-        articoliReso.push(scontrino.articoli[index]);
-    });
-
-    const totaleReso = articoliReso.reduce((sum, a) => sum + a.importo + a.importoIva, 0);
-
-    if (!confirm(`Confermi il reso di ${formatCurrency(totaleReso)}?`)) return;
-
-    showToast('Invio in corso', 'Attendere...', 'info');
+    const articoliIds = Array.from(checkboxes).map(cb => cb.value);
+    
+    showToast('Elaborazione', 'Reso in corso...', 'info');
 
     try {
-        // Prepara payload reso per API
-        const payload = {
-            original_receipt_id: scontrino.id,
-            items: articoliReso.map(a => ({
-                description: a.descrizione,
-                quantity: a.quantita,
-                unit_price: a.prezzo,
-                vat_rate: a.iva
-            })),
-            refund_amount: totaleReso
-        };
+        const response = await apiCall(
+            `${API_CONFIG.endpoints.receipts}/${appState.scontrinoSelezionato.id}`,
+            'PATCH',
+            { refund_items: articoliIds }
+        );
 
-        const baseUrl = appState.ambiente === 'production' ? API_CONFIG.baseUrl : API_CONFIG.sandboxUrl;
-        const response = await fetch(`${baseUrl}/IT-receipts/${scontrinoId}`, {
-            method: 'PATCH',
-            headers: {
-                'Content-Type': 'application/json',
-                'Authorization': 'Bearer ' + appState.token
-            },
-            body: JSON.stringify(payload)
-        });
+        const result = await response.json();
 
         if (response.ok) {
-            // Crea scontrino di reso locale
-            const scontrinoReso = {
-                id: generateId(),
-                numero: generateNumeroScontrino() + '-R',
-                dataOra: new Date().toISOString(),
-                articoli: articoliReso,
-                metodoPagamento: scontrino.metodoPagamento,
-                totale: -totaleReso,
-                stato: 'inviato',
-                tipo: 'reso',
-                scontrinoOriginale: scontrino.numero
-            };
-
-            appState.scontrini.unshift(scontrinoReso);
-            localStorage.setItem('scontrini', JSON.stringify(appState.scontrini));
-
-            showToast('Successo', 'Reso completato', 'success');
-            aggiornaStatistiche();
-            showSection('dashboard');
+            showToast('Successo', 'Reso effettuato', 'success');
+            document.getElementById('dettaglio-reso').classList.add('hidden');
         } else {
-            const error = await response.json();
-            showToast('Errore', error.message || 'Errore durante il reso', 'danger');
+            showToast('Errore', result.message || 'Errore durante il reso', 'danger');
+        }
+    } catch (error) {
+        showToast('Errore', 'Errore di connessione', 'danger');
+    }
+}
+
+async function annullaScontrino() {
+    if (!appState.scontrinoSelezionato) return;
+    
+    if (!confirm('Sei sicuro di voler annullare l\'intero scontrino?')) return;
+
+    showToast('Elaborazione', 'Annullamento in corso...', 'info');
+
+    try {
+        const response = await apiCall(
+            `${API_CONFIG.endpoints.receipts}/${appState.scontrinoSelezionato.id}`,
+            'DELETE'
+        );
+
+        const result = await response.json();
+
+        if (response.ok) {
+            // Aggiorna stato locale
+            const idx = appState.scontrini.findIndex(s => s.id === appState.scontrinoSelezionato.id);
+            if (idx !== -1) {
+                appState.scontrini[idx].stato = 'annullato';
+                localStorage.setItem('scontrini', JSON.stringify(appState.scontrini));
+            }
+
+            showToast('Successo', 'Scontrino annullato', 'success');
+            document.getElementById('dettaglio-reso').classList.add('hidden');
+            aggiornaStatistiche();
+        } else {
+            showToast('Errore', result.message || 'Errore durante l\'annullamento', 'danger');
         }
     } catch (error) {
         showToast('Errore', 'Errore di connessione', 'danger');
@@ -1003,24 +731,25 @@ async function testConnessione() {
         return;
     }
 
+    // Salva temporaneamente per la chiamata
+    appState.token = token;
+    appState.ambiente = ambiente;
+
     showToast('Test in corso', 'Verifica connessione...', 'info');
 
     try {
-        const baseUrl = ambiente === 'production' ? API_CONFIG.baseUrl : API_CONFIG.sandboxUrl;
-        const response = await fetch(`${baseUrl}/IT-configurations`, {
-            method: 'GET',
-            headers: {
-                'Authorization': 'Bearer ' + token
-            }
-        });
+        const response = await apiCall(API_CONFIG.endpoints.configurations, 'GET');
+        const result = await response.json();
+
+        console.log('Test response:', response.status, result);
 
         if (response.ok) {
             showToast('Successo', 'Connessione verificata!', 'success');
         } else {
-            const error = await response.json();
-            showToast('Errore', error.message || 'Token non valido', 'danger');
+            showToast('Errore', result.message || result.error || 'Token non valido', 'danger');
         }
     } catch (error) {
+        console.error('Test connection error:', error);
         showToast('Errore', 'Impossibile connettersi al server', 'danger');
     }
 }
@@ -1030,10 +759,12 @@ function checkConfigurazione() {
                          (appState.configurazione.partitaIva || appState.configurazione.codiceFiscale);
     
     const alert = document.getElementById('config-alert');
-    if (isConfigured) {
-        alert.classList.add('hidden');
-    } else {
-        alert.classList.remove('hidden');
+    if (alert) {
+        if (isConfigured) {
+            alert.classList.add('hidden');
+        } else {
+            alert.classList.remove('hidden');
+        }
     }
 }
 
@@ -1089,22 +820,18 @@ function showToast(title, message, type = 'info') {
         success: 'bi-check-circle text-success',
         danger: 'bi-x-circle text-danger',
         warning: 'bi-exclamation-triangle text-warning',
-        info: 'bi-info-circle text-primary'
+        info: 'bi-info-circle text-info'
     };
+
     toastIcon.className = 'bi me-2 ' + (icons[type] || icons.info);
 
     const bsToast = new bootstrap.Toast(toast);
     bsToast.show();
 }
 
-function downloadFile(content, filename, mimeType) {
-    const blob = new Blob([content], { type: mimeType });
-    const url = URL.createObjectURL(blob);
-    const a = document.createElement('a');
-    a.href = url;
-    a.download = filename;
-    document.body.appendChild(a);
-    a.click();
-    document.body.removeChild(a);
-    URL.revokeObjectURL(url);
+// Service Worker per PWA
+if ('serviceWorker' in navigator) {
+    navigator.serviceWorker.register('/sw.js').catch(err => {
+        console.log('Service Worker non registrato:', err);
+    });
 }
